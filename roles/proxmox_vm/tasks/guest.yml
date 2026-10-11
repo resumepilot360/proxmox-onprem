@@ -1,0 +1,15 @@
+# Runs on a new node before proxmox_install: copies the Proxmox VE ISO from the CD-ROM drive to the
+# place where proxmox_install keeps it, so the ISO is the node's package source.
+- name: "Copy the Proxmox VE ISO from the CD-ROM"
+  shell: |
+    set -e
+    store={{ proxmox_install_iso_store | quote }}
+    [ -e "$store" ] && exit 0
+    label=$(blkid -o value -s LABEL /dev/sr0 || true)
+    [ "$label" = PVE ] || { echo "/dev/sr0 is not the Proxmox VE ISO (label '$label')" >&2; exit 1; }
+    mkdir -p "$(dirname "$store")"
+    dd if=/dev/sr0 of="$store.part" bs=4M status=none
+    mv "$store.part" "$store"
+    echo copied
+  register: proxmox_vm_iso_copy
+  changed_when: "'copied' in proxmox_vm_iso_copy.stdout"

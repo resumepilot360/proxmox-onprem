@@ -5,9 +5,12 @@ role, `proxmox_install`. Nothing is created or partitioned: the disk layout (inc
 
 ```
 proxmox-onprem/
-├── site.yml                      # applies roles/proxmox_install
+├── site.yml                      # existing Debian hosts -> Proxmox VE (roles/proxmox_install)
+├── vm.yml                        # new VMs on a Proxmox server -> Debian -> Proxmox VE, in one run
 ├── roles/proxmox_install/        # install, CIS mount check, auditd, network, storage
-├── group_vars/proxmox.yml        # mirrors, CIS mount check, auditd
+├── roles/proxmox_vm/             # creates VMs and installs Debian 13 (CIS partitions) unattended
+├── group_vars/proxmox.yml        # ISO or mirrors, CIS mount check, auditd
+├── group_vars/hypervisor.yml     # the VMs to create (vm.yml)
 ├── host_vars/<name>.yml          # per node: network bridge, storage (you create these)
 └── inventory.ini.example
 ```
@@ -55,6 +58,58 @@ Then, each only when its variable is set:
 
 Every step is idempotent, so re-running on an installed node only applies updates and configuration.
 Afterwards the web UI is at `https://<host>:8006` (log in as `root`, realm *Linux PAM*).
+
+## New nodes as VMs, in one run (`vm.yml`)
+
+Instead of installing Debian by hand first, `vm.yml` starts from an existing Proxmox server and ends
+with Proxmox VE nodes running as VMs on it:
+
+1. **On the server** (inventory group `hypervisor`, role `proxmox_vm`), for each VM in
+   `proxmox_vm_guests`: creates the VM (CPU type `host` for nested virtualization), boots the Debian
+   installer from the Debian DVD with a generated preseed file, and installs Debian 13 unattended
+   with the CIS partitions below, a static IP and root's SSH key. All VMs install in parallel. When
+   an install is done the VM powers off; the role then boots it from its disk with the Proxmox VE ISO
+   in its CD-ROM drive.
+2. **On each new VM** (added to the inventory automatically): copies the Proxmox ISO from the CD-ROM,
+   runs `proxmox_install` from it (same as `site.yml`, air-gapped), moves the IP to a `vmbr0` bridge,
+   and turns the rest of the disk into the `local-lvm` thin pool.
+
+Needs on the Proxmox server (in storage `local`, i.e. `/var/lib/vz/template/iso/`):
+
+- the Debian 13 **DVD** ISO (`debian-13.x.y-amd64-DVD-1.iso`; netinst needs a mirror), and
+- the Proxmox VE ISO (`proxmox-ve_9.2-1.iso`).
+
+```sh
+cp inventory.ini.example inventory.ini     # [hypervisor]: your Proxmox server, as root
+openssl passwd -6                          # root password hash for the new nodes
+$EDITOR group_vars/hypervisor.yml          # ISOs, password hash, VMs (vmid, name, address, gateway)
+$EDITOR group_vars/proxmox.yml             # CIS mount check, auditd (applies to the new nodes too)
+ansible-playbook vm.yml
+```
+
+Ansible logs in to the new nodes as root with your SSH key (`~/.ssh/id_ed25519.pub` by default, see
+`proxmox_vm_ssh_public_key`). The web UI login is `root` with the password whose hash you set.
+
+Disk layout of each VM (sizes in `proxmox_vm_partitions`, GiB; default disk 100 GiB):
+
+| Mount | Size | Options |
+|---|---|---|
+| `/boot` (partition) | 1 | nodev, nosuid |
+| `/` | 20 | |
+| `/home` | 2 | nodev, nosuid |
+| `/tmp` | 4 | nodev, nosuid, noexec |
+| `/var` | 20 | nodev, nosuid |
+| `/var/tmp` | 4 | nodev, nosuid, noexec |
+| `/var/log` | 8 | nodev, nosuid, noexec |
+| `/var/log/audit` | 4 | nodev, nosuid, noexec |
+| `/dev/shm` (tmpfs) | | nodev, nosuid, noexec |
+| swap | 4 | |
+| thin pool `pve/data` (`local-lvm`) | rest | |
+
+Re-running is safe: existing VMs are not touched (only `proxmox_install` runs again on them). To
+rebuild one, delete it on the server (`qm stop <vmid>; qm destroy <vmid>`) and remove its old SSH
+host key (`ssh-keygen -R <ip>`). If an install doesn't finish within `proxmox_vm_install_timeout`
+(default 1 h), the installer is waiting on a question: open the VM's console in the web UI.
 
 ## Role variables (`proxmox_install`)
 

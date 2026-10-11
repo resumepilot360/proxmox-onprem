@@ -1,0 +1,62 @@
+# One run from nothing to Proxmox VE nodes as VMs on an existing Proxmox server:
+# 1. on the server (group "hypervisor"): create the VMs and install Debian 13 with CIS partitions
+#    unattended from the Debian DVD (role proxmox_vm);
+# 2. on each new VM: install Proxmox VE from the Proxmox ISO in its CD-ROM drive (role proxmox_install).
+# Settings: group_vars/hypervisor.yml (the VMs) and group_vars/proxmox.yml (the Proxmox install).
+- name: "Create the VMs and install Debian"
+  hosts: hypervisor
+  become: true
+  roles:
+    - proxmox_vm
+
+- name: "Install Proxmox VE in the new VMs"
+  hosts: proxmox_vm_new
+  gather_facts: false
+  # Reload networking even if a later task fails, so a written interfaces file is never left unapplied.
+  force_handlers: true
+  vars:
+    # The Proxmox ISO is copied from the VM's CD-ROM to here, and proxmox_install uses it from there.
+    proxmox_install_iso_store: /var/lib/proxmox-iso/proxmox-ve.iso
+    proxmox_install_iso_path: /var/lib/proxmox-iso/proxmox-ve.iso
+    # vmbr0 takes over the node's address, so guests can be bridged onto the same network.
+    proxmox_install_network_interfaces: |
+      auto lo
+      iface lo inet loopback
+
+      iface {{ ansible_facts.default_ipv4.interface }} inet manual
+
+      auto vmbr0
+      iface vmbr0 inet static
+      	address {{ proxmox_vm_address }}
+      	gateway {{ proxmox_vm_gateway }}
+      	bridge-ports {{ ansible_facts.default_ipv4.interface }}
+      	bridge-stp off
+      	bridge-fd 0
+
+      source /etc/network/interfaces.d/*
+    proxmox_install_storage_cfg: |
+      dir: local
+      	path /var/lib/vz
+      	content iso,vztmpl,backup
+
+      lvmthin: local-lvm
+      	thinpool data
+      	vgname pve
+      	content rootdir,images
+  pre_tasks:
+    - name: "Wait for SSH"
+      wait_for_connection:
+        timeout: 600
+    - name: "Gather facts"
+      setup:
+    - name: "Get the Proxmox VE ISO from the CD-ROM"
+      include_role:
+        name: proxmox_vm
+        tasks_from: guest
+  roles:
+    - proxmox_install
+  post_tasks:
+    - name: "Create the local-lvm thin pool"
+      include_role:
+        name: proxmox_vm
+        tasks_from: thinpool

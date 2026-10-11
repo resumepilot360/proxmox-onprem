@@ -1,0 +1,10 @@
+# Runs on a new node after proxmox_install: turns the free space the installer left in VG "pve"
+# into the "data" thin pool (storage local-lvm).
+- name: "Create the data thin pool"
+  shell: |
+    set -e
+    lvs pve/data >/dev/null 2>&1 && exit 0
+    lvcreate -y --type thin-pool -l 95%FREE -n data pve
+    echo created
+  register: proxmox_vm_thinpool
+  changed_when: "'created' in proxmox_vm_thinpool.stdout"

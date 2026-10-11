@@ -1,0 +1,37 @@
+# Waits for the Debian install of one VM (the installer powers it off), then boots it from its disk
+# with the Proxmox VE ISO in the CD-ROM drive. Skipped for VMs this role didn't start installing.
+- name: "Settings for {{ proxmox_vm_guest.name }}"
+  set_fact:
+    proxmox_vm: "{{ proxmox_vm_defaults | combine(proxmox_vm_guest) }}"
+    proxmox_vm_dir: "{{ proxmox_vm_workdir }}/{{ proxmox_vm_guest.vmid }}"
+
+- name: "Check for an install in progress"
+  stat:
+    path: "{{ proxmox_vm_dir }}/initrd-preseed.gz"
+    get_checksum: false
+  register: proxmox_vm_installing
+
+- name: "Finish VM {{ proxmox_vm.vmid }}"
+  when: proxmox_vm_installing.stat.exists
+  block:
+    - name: "Wait for the Debian install on VM {{ proxmox_vm.vmid }} (watch it on the VM's console)"
+      command: qm status {{ proxmox_vm.vmid }}
+      register: proxmox_vm_state
+      until: "'stopped' in proxmox_vm_state.stdout"
+      retries: "{{ (proxmox_vm_install_timeout / 30) | int }}"
+      delay: 30
+      changed_when: false
+
+    - name: "Boot VM {{ proxmox_vm.vmid }} from its disk"
+      command: qm set {{ proxmox_vm.vmid }} --delete args --boot order=scsi0
+
+    - name: "Put the Proxmox VE ISO in the CD-ROM drive"
+      command: qm set {{ proxmox_vm.vmid }} --ide2 {{ (proxmox_vm_pve_iso ~ ',media=cdrom') | quote }}
+
+    - name: "Start VM {{ proxmox_vm.vmid }}"
+      command: qm start {{ proxmox_vm.vmid }}
+
+    - name: "Remove the working directory"
+      file:
+        path: "{{ proxmox_vm_dir }}"
+        state: absent
