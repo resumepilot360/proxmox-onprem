@@ -1,0 +1,59 @@
+# Second stage for new nodes (imported by vm.yml and baremetal.yml): installs Proxmox VE from the
+# Proxmox ISO with the proxmox_install role, bridges the node's IP on vmbr0 and creates local-lvm.
+# Runs on the hosts the first stage added to group "proxmox_autoinstall_new".
+- name: "Install Proxmox VE on the new nodes"
+  hosts: proxmox_autoinstall_new
+  gather_facts: false
+  # Reload networking even if a later task fails, so a written interfaces file is never left unapplied.
+  force_handlers: true
+  vars:
+    # The Proxmox ISO is here: copied by the installer (bare metal) or from the VM's CD-ROM drive.
+    proxmox_install_iso_store: /var/lib/proxmox-iso/proxmox-ve.iso
+    proxmox_install_iso_path: /var/lib/proxmox-iso/proxmox-ve.iso
+    # vmbr0 takes over the node's address, so guests can be bridged onto the same network. The NIC
+    # is the default-route interface, or the port under it once vmbr0 exists (re-runs).
+    proxmox_autoinstall_nic: >-
+      {{ (ansible_facts[ansible_facts.default_ipv4.interface].interfaces | first)
+         if ansible_facts.default_ipv4.interface == 'vmbr0'
+         else ansible_facts.default_ipv4.interface }}
+    proxmox_install_network_interfaces: |
+      auto lo
+      iface lo inet loopback
+
+      iface {{ proxmox_autoinstall_nic }} inet manual
+
+      auto vmbr0
+      iface vmbr0 inet static
+      	address {{ proxmox_autoinstall_address }}
+      	gateway {{ proxmox_autoinstall_gateway }}
+      	bridge-ports {{ proxmox_autoinstall_nic }}
+      	bridge-stp off
+      	bridge-fd 0
+
+      source /etc/network/interfaces.d/*
+    proxmox_install_storage_cfg: |
+      dir: local
+      	path /var/lib/vz
+      	content iso,vztmpl,backup
+
+      lvmthin: local-lvm
+      	thinpool data
+      	vgname pve
+      	content rootdir,images
+  pre_tasks:
+    - name: "Wait for SSH (bare metal: until the server is booted from its ISO and installed)"
+      wait_for_connection:
+        timeout: "{{ proxmox_autoinstall_connect_timeout | default(600) | int }}"
+    - name: "Gather facts"
+      setup:
+    - name: "Get the Proxmox VE ISO from the CD-ROM (VMs)"
+      include_role:
+        name: proxmox_autoinstall
+        tasks_from: guest
+  roles:
+    - proxmox_install
+  post_tasks:
+    - name: "Create the local-lvm thin pool"
+      include_role:
+        name: proxmox_autoinstall
+        tasks_from: thinpool

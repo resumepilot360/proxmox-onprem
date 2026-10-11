@@ -11,5 +11,5 @@
     dd if=/dev/sr0 of="$store.part" bs=4M status=none
     mv "$store.part" "$store"
     echo copied
-  register: proxmox_vm_iso_copy
-  changed_when: "'copied' in proxmox_vm_iso_copy.stdout"
+  register: proxmox_autoinstall_iso_copy
+  changed_when: "'copied' in proxmox_autoinstall_iso_copy.stdout"

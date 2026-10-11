@@ -1,6 +1,19 @@
 # Replaces /etc/pve/storage.cfg, so list every storage the node should have.
+# /etc/pve is the Proxmox cluster file system: it manages modes and timestamps itself and refuses
+# the metadata changes Ansible's copy module makes, so the file is compared and written with cat.
+- name: "Read /etc/pve/storage.cfg"
+  slurp:
+    src: /etc/pve/storage.cfg
+  register: proxmox_install_storage_current
+  failed_when: false
+
 - name: "Write /etc/pve/storage.cfg"
-  copy:
-    content: "{{ proxmox_install_storage_cfg }}"
-    dest: /etc/pve/storage.cfg
-    mode: "0640"
+  command: tee /etc/pve/storage.cfg
+  args:
+    stdin: "{{ proxmox_install_storage_cfg }}"
+    stdin_add_newline: false
+  # Only runs when the content differs.
+  changed_when: true
+  when: >-
+    (proxmox_install_storage_current.content | default('') | b64decode)
+    != proxmox_install_storage_cfg

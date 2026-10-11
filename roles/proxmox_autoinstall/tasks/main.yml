@@ -1,0 +1,45 @@
+# Installs Debian 13 with CIS partitions unattended on new Proxmox nodes, then adds them to the
+# inventory (groups "proxmox" and "proxmox_autoinstall_new") for node.yml / the proxmox_install role.
+#   proxmox_autoinstall_target: vm         runs on a Proxmox server and creates the nodes as VMs;
+#   proxmox_autoinstall_target: baremetal  builds one bootable ISO per server to boot it from.
+- name: "Check the settings"
+  assert:
+    that:
+      - proxmox_autoinstall_target in ['vm', 'baremetal']
+      - proxmox_autoinstall_nodes | length > 0
+      - proxmox_autoinstall_root_password_hash is match('^\\$')
+      - proxmox_autoinstall_nodes | rejectattr('name', 'defined') | list | length == 0
+      - proxmox_autoinstall_nodes | rejectattr('address', 'defined') | list | length == 0
+      - proxmox_autoinstall_nodes | rejectattr('gateway', 'defined') | list | length == 0
+      - proxmox_autoinstall_nodes | map(attribute='address') | reject('search', '/') | list | length == 0
+    fail_msg: >-
+      Set proxmox_autoinstall_target (vm or baremetal), proxmox_autoinstall_nodes (each with name,
+      address as CIDR, gateway) and proxmox_autoinstall_root_password_hash (a crypt hash, e.g. from
+      "openssl passwd -6").
+    quiet: true
+
+- name: "Install the nodes ({{ proxmox_autoinstall_target }})"
+  include_tasks: "{{ proxmox_autoinstall_target }}.yml"
+
+- name: "Add the new nodes to the inventory"
+  add_host:
+    name: "{{ item.name }}"
+    groups:
+      - proxmox
+      - proxmox_autoinstall_new
+    ansible_host: "{{ item.address.split('/')[0] }}"
+    ansible_user: root
+    ansible_become: false
+    # The node's host key is new; a node reinstalled at the same IP needs its old key removed first.
+    ansible_ssh_common_args: >-
+      -o StrictHostKeyChecking=accept-new
+      {{ ('-o ProxyJump=' ~ proxmox_autoinstall_ssh_jump) if proxmox_autoinstall_ssh_jump | length > 0 else '' }}
+    proxmox_autoinstall_address: "{{ item.address }}"
+    proxmox_autoinstall_gateway: "{{ item.gateway }}"
+    # VMs are installed by now; bare-metal servers still have to be booted from their ISO.
+    proxmox_autoinstall_connect_timeout: >-
+      {{ 600 if proxmox_autoinstall_target == 'vm' else proxmox_autoinstall_baremetal_wait }}
+  loop: "{{ proxmox_autoinstall_nodes }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: false

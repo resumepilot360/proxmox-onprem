@@ -4,6 +4,12 @@ proxmox_install_iso_path: ""
 # Where the ISO is moved to (/tmp is emptied by the reboot) and mounted. Needs ~2 GB free.
 proxmox_install_iso_store: /var/lib/proxmox-iso/proxmox-ve.iso
 proxmox_install_iso_mount: /mnt/pve-iso
+# Optional: the Debian 13 DVD ISO on the host (e.g. /tmp/debian-13.7.0-amd64-DVD-1.iso), used as a
+# second package source for Debian packages that aren't on the Proxmox ISO (auditd, sudo, ...).
+# Needs ~4 GB in the directory of proxmox_install_debian_iso_store. Empty: not used.
+proxmox_install_debian_iso_path: ""
+proxmox_install_debian_iso_store: /var/lib/proxmox-iso/debian-dvd.iso
+proxmox_install_debian_iso_mount: /mnt/debian-iso
 # Disable the host's other apt sources (internet mirrors, the Debian DVD), which air-gapped can't be
 # reached and make "apt update" fail. Backups are kept.
 proxmox_install_iso_disable_other_sources: true

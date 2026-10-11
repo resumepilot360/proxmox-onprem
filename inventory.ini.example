@@ -12,3 +12,8 @@ pve-a ansible_host=192.168.10.21 ansible_user=youruser ansible_become_method=su
 # are added automatically; don't list them under [proxmox].
 [hypervisor]
 pve-host ansible_host=192.168.10.5 ansible_user=root
+
+# [builder]: where baremetal.yml builds the bootable install ISOs (needs xorriso and ~6 GB per
+# server). The servers themselves are added automatically once they are installed.
+[builder]
+localhost ansible_connection=local

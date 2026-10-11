@@ -1,0 +1,75 @@
+# vm: create the nodes as VMs on a Proxmox server (play on the server, see vm.yml).
+# baremetal: build a bootable ISO per server to boot it from (play on the build host, see baremetal.yml).
+proxmox_autoinstall_target: vm
+
+# The nodes, one dict each. Required: name, address (CIDR), gateway; for VMs also vmid.
+# Any key of proxmox_autoinstall_defaults can be overridden per node.
+proxmox_autoinstall_nodes: []
+#  - vmid: 201              # VMs only
+#    name: pve-a
+#    address: 192.168.10.31/24
+#    gateway: 192.168.10.1
+#    disk: /dev/nvme0n1     # bare metal: the disk to install on (erased)
+
+proxmox_autoinstall_defaults:
+  disk: /dev/sda           # disk to install on, erased (VMs: /dev/sda)
+  nameservers: ""          # space separated; empty: none (air-gapped)
+  domain: localdomain
+  # VMs only:
+  memory: 8192             # MiB
+  cores: 4
+  disk_storage: local-lvm  # Proxmox storage for the VM disk
+  disk_size: 100           # GiB; CIS partitions below, the rest becomes the "data" thin pool
+  bridge: vmbr0
+  vlan: ""                 # VLAN tag on the bridge; empty: none
+  # false: no hardware virtualization (e.g. a Proxmox server that is itself a VM without nested
+  # virtualization). Works, but everything inside the VM is emulated and many times slower.
+  kvm: true
+
+# --- VMs ---
+# ISOs on the Proxmox server, as storage volumes (see "pvesm list local").
+# The Debian DVD (not netinst) installs without a mirror; the Proxmox ISO is the package source after.
+proxmox_autoinstall_debian_iso: local:iso/debian-13.7.0-amd64-DVD-1.iso
+proxmox_autoinstall_pve_iso: local:iso/proxmox-ve_9.2-1.iso
+
+# Root password of the new nodes as a crypt hash (also the Proxmox web UI login), e.g. from
+# "openssl passwd -6". Keep it in a vault.
+proxmox_autoinstall_root_password_hash: ""
+# SSH key Ansible logs in to the new nodes with, as root.
+proxmox_autoinstall_ssh_public_key: "{{ lookup('file', '~/.ssh/id_ed25519.pub') }}"
+
+# SSH jump host to reach the new nodes, when the controller can't reach their network directly
+# (e.g. "root@pve-host" for VMs on a NAT bridge of the server). Empty: connect directly.
+proxmox_autoinstall_ssh_jump: ""
+
+proxmox_autoinstall_timezone: UTC
+proxmox_autoinstall_keymap: us
+
+# Seconds to wait for the unattended Debian install of one VM.
+proxmox_autoinstall_install_timeout: 3600
+
+# CIS partition sizes in GiB, as LVs in volume group "pve". /boot (1 GiB) is a plain partition.
+proxmox_autoinstall_partitions:
+  root: 20
+  swap: 4
+  home: 2
+  tmp: 4
+  var: 20
+  var_tmp: 4
+  var_log: 8
+  var_log_audit: 4
+
+# Working files on the Proxmox server (installer kernel, initrd with the preseed file), per VM.
+proxmox_autoinstall_workdir: /var/lib/vz/proxmox-vm-install
+
+# --- Bare metal ---
+# ISO files on the build host, and where the per-server ISOs (~6 GB each) are written.
+proxmox_autoinstall_debian_iso_file: "{{ playbook_dir }}/files/debian-13.7.0-amd64-DVD-1.iso"
+proxmox_autoinstall_pve_iso_file: "{{ playbook_dir }}/files/proxmox-ve_9.2-1.iso"
+proxmox_autoinstall_iso_output_dir: "{{ playbook_dir }}/files/autoinstall"
+# Seconds to wait for each server to be booted from its ISO, installed and reachable over SSH.
+proxmox_autoinstall_baremetal_wait: 14400
+# Reboot instead of powering off after the install. Only when the server then boots from its disk
+# (e.g. UEFI, where the installer puts Debian first in the boot order); otherwise it would boot the
+# ISO again and reinstall.
+proxmox_autoinstall_baremetal_reboot: false

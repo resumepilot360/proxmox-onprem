@@ -1,0 +1,46 @@
+# On the build host (the controller by default): builds one bootable ISO per server from the Debian
+# DVD, with the server's preseed file, a boot menu that starts the install by itself (BIOS and UEFI)
+# and the Proxmox VE ISO inside. Boot each server from its ISO (USB stick or BMC virtual media).
+- name: "Check that xorriso is installed"
+  command: xorriso -version
+  register: proxmox_autoinstall_xorriso
+  changed_when: false
+  failed_when: false
+
+- name: "Assert xorriso is available"
+  assert:
+    that: proxmox_autoinstall_xorriso.rc == 0
+    fail_msg: "Building the ISOs needs xorriso on {{ inventory_hostname }} (apt install xorriso / brew install xorriso)."
+    quiet: true
+
+- name: "Check that the ISOs exist"
+  stat:
+    path: "{{ item }}"
+    get_checksum: false
+  loop:
+    - "{{ proxmox_autoinstall_debian_iso_file }}"
+    - "{{ proxmox_autoinstall_pve_iso_file }}"
+  register: proxmox_autoinstall_iso_files
+  failed_when: not proxmox_autoinstall_iso_files.stat.exists
+
+- name: "Create the output directory"
+  file:
+    path: "{{ proxmox_autoinstall_iso_output_dir }}/build"
+    state: directory
+    mode: "0700"
+
+- name: "Build the ISOs"
+  include_tasks: image.yml
+  loop: "{{ proxmox_autoinstall_nodes }}"
+  loop_control:
+    loop_var: proxmox_autoinstall_item
+    label: "{{ proxmox_autoinstall_item.name }}"
+
+- name: "Next step"
+  debug:
+    msg: >-
+      Boot each server from {{ proxmox_autoinstall_iso_output_dir }}/pve-autoinstall-<name>.iso
+      (USB stick: dd if=<iso> of=/dev/<stick> bs=4M; or the BMC's virtual media). The install erases
+      the disk {{ proxmox_autoinstall_defaults.disk }} (or the node's "disk") and powers the server off
+      when done: remove the ISO, then power it on. This play waits up to
+      {{ proxmox_autoinstall_baremetal_wait }} s for each server to come up over SSH.

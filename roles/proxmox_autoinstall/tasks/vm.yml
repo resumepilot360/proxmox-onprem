@@ -1,0 +1,40 @@
+# On the Proxmox server: creates the VMs and installs Debian 13 in them unattended (direct kernel
+# boot of the Debian installer with the preseed file in its initrd).
+- name: "Check the VM settings"
+  assert:
+    that: proxmox_autoinstall_nodes | rejectattr('vmid', 'defined') | list | length == 0
+    fail_msg: "Every entry of proxmox_autoinstall_nodes needs a vmid."
+    quiet: true
+
+- name: "Find the ISOs"
+  command: pvesm path {{ item | quote }}
+  loop:
+    - "{{ proxmox_autoinstall_debian_iso }}"
+    - "{{ proxmox_autoinstall_pve_iso }}"
+  register: proxmox_autoinstall_iso_paths
+  changed_when: false
+
+- name: "Check that the ISOs exist"
+  stat:
+    path: "{{ item.stdout }}"
+    get_checksum: false
+  loop: "{{ proxmox_autoinstall_iso_paths.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  register: proxmox_autoinstall_iso_stat
+  failed_when: not proxmox_autoinstall_iso_stat.stat.exists
+
+# All VMs install in parallel: create and start them all, then wait for each.
+- name: "Create the VMs"
+  include_tasks: create.yml
+  loop: "{{ proxmox_autoinstall_nodes }}"
+  loop_control:
+    loop_var: proxmox_autoinstall_item
+    label: "{{ proxmox_autoinstall_item.name }}"
+
+- name: "Wait for the installs"
+  include_tasks: finish.yml
+  loop: "{{ proxmox_autoinstall_nodes }}"
+  loop_control:
+    loop_var: proxmox_autoinstall_item
+    label: "{{ proxmox_autoinstall_item.name }}"

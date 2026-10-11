@@ -1,0 +1,37 @@
+# Waits for the Debian install of one VM (the installer powers it off), then boots it from its disk
+# with the Proxmox VE ISO in the CD-ROM drive. Skipped for VMs this role didn't start installing.
+- name: "Settings for {{ proxmox_autoinstall_item.name }}"
+  set_fact:
+    proxmox_autoinstall_cfg: "{{ proxmox_autoinstall_defaults | combine(proxmox_autoinstall_item) }}"
+    proxmox_autoinstall_dir: "{{ proxmox_autoinstall_workdir }}/{{ proxmox_autoinstall_item.vmid }}"
+
+- name: "Check for an install in progress"
+  stat:
+    path: "{{ proxmox_autoinstall_dir }}/initrd-preseed.gz"
+    get_checksum: false
+  register: proxmox_autoinstall_installing
+
+- name: "Finish VM {{ proxmox_autoinstall_cfg.vmid }}"
+  when: proxmox_autoinstall_installing.stat.exists
+  block:
+    - name: "Wait for the Debian install on VM {{ proxmox_autoinstall_cfg.vmid }} (watch it on the VM's console)"
+      command: qm status {{ proxmox_autoinstall_cfg.vmid }}
+      register: proxmox_autoinstall_state
+      until: "'stopped' in proxmox_autoinstall_state.stdout"
+      retries: "{{ (proxmox_autoinstall_install_timeout / 30) | int }}"
+      delay: 30
+      changed_when: false
+
+    - name: "Boot VM {{ proxmox_autoinstall_cfg.vmid }} from its disk"
+      command: qm set {{ proxmox_autoinstall_cfg.vmid }} --delete args --boot order=scsi0
+
+    - name: "Put the Proxmox VE ISO in the CD-ROM drive"
+      command: qm set {{ proxmox_autoinstall_cfg.vmid }} --ide2 {{ (proxmox_autoinstall_pve_iso ~ ',media=cdrom') | quote }}
+
+    - name: "Start VM {{ proxmox_autoinstall_cfg.vmid }}"
+      command: qm start {{ proxmox_autoinstall_cfg.vmid }}
+
+    - name: "Remove the working directory"
+      file:
+        path: "{{ proxmox_autoinstall_dir }}"
+        state: absent

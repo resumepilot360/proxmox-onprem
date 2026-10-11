@@ -6,5 +6,5 @@
     lvs pve/data >/dev/null 2>&1 && exit 0
     lvcreate -y --type thin-pool -l 95%FREE -n data pve
     echo created
-  register: proxmox_vm_thinpool
-  changed_when: "'created' in proxmox_vm_thinpool.stdout"
+  register: proxmox_autoinstall_thinpool
+  changed_when: "'created' in proxmox_autoinstall_thinpool.stdout"

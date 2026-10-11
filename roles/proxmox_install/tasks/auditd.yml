@@ -13,9 +13,10 @@
       fail:
         msg: >-
           auditd could not be installed: {{ ansible_failed_result.msg | default('') }}.
-          It isn't on the Proxmox VE ISO. Put its .deb files (auditd, audispd-plugins, libauparse0t64)
-          in a directory on the controller and set proxmox_install_local_debs_dir to it, or set
-          proxmox_install_auditd_enabled to false.
+          It isn't on the Proxmox VE ISO. Add the Debian 13 DVD as package source
+          (proxmox_install_debian_iso_path), or put its .deb files (auditd, audispd-plugins,
+          libauparse0t64) in a directory on the controller and set proxmox_install_local_debs_dir,
+          or set proxmox_install_auditd_enabled to false.
 
 - name: "Enable auditd"
   systemd_service:

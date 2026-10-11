@@ -6,11 +6,14 @@ role, `proxmox_install`. Nothing is created or partitioned: the disk layout (inc
 ```
 proxmox-onprem/
 ├── site.yml                      # existing Debian hosts -> Proxmox VE (roles/proxmox_install)
-├── vm.yml                        # new VMs on a Proxmox server -> Debian -> Proxmox VE, in one run
+├── vm.yml                        # new VMs on a Proxmox server -> Debian -> Proxmox VE, one run
+├── baremetal.yml                 # bare-metal servers -> Debian -> Proxmox VE, from a built ISO
+├── node.yml                      # second stage of vm.yml / baremetal.yml (Proxmox VE install)
 ├── roles/proxmox_install/        # install, CIS mount check, auditd, network, storage
-├── roles/proxmox_vm/             # creates VMs and installs Debian 13 (CIS partitions) unattended
+├── roles/proxmox_autoinstall/    # unattended Debian 13 install (CIS partitions): VMs or ISOs
 ├── group_vars/proxmox.yml        # ISO or mirrors, CIS mount check, auditd
 ├── group_vars/hypervisor.yml     # the VMs to create (vm.yml)
+├── group_vars/builder.yml        # the bare-metal servers (baremetal.yml)
 ├── host_vars/<name>.yml          # per node: network bridge, storage (you create these)
 └── inventory.ini.example
 ```
@@ -59,41 +62,76 @@ Then, each only when its variable is set:
 Every step is idempotent, so re-running on an installed node only applies updates and configuration.
 Afterwards the web UI is at `https://<host>:8006` (log in as `root`, realm *Linux PAM*).
 
-## New nodes as VMs, in one run (`vm.yml`)
+## New nodes from scratch: VMs or bare metal
 
-Instead of installing Debian by hand first, `vm.yml` starts from an existing Proxmox server and ends
-with Proxmox VE nodes running as VMs on it:
+Instead of installing Debian by hand first, `vm.yml` and `baremetal.yml` start from nothing and end
+with Proxmox VE nodes. Both use the role `proxmox_autoinstall`, which installs Debian 13 unattended
+from the Debian **DVD** (no mirror needed) with a generated preseed file: the CIS partitions below, a
+static IP and root's SSH key. Then `node.yml` installs Proxmox VE on the new nodes from the Proxmox
+ISO with `proxmox_install` (same as `site.yml`, air-gapped), moves the IP to a `vmbr0` bridge and
+turns the rest of the disk into the `local-lvm` thin pool.
 
-1. **On the server** (inventory group `hypervisor`, role `proxmox_vm`), for each VM in
-   `proxmox_vm_guests`: creates the VM (CPU type `host` for nested virtualization), boots the Debian
-   installer from the Debian DVD with a generated preseed file, and installs Debian 13 unattended
-   with the CIS partitions below, a static IP and root's SSH key. All VMs install in parallel. When
-   an install is done the VM powers off; the role then boots it from its disk with the Proxmox VE ISO
-   in its CD-ROM drive.
-2. **On each new VM** (added to the inventory automatically): copies the Proxmox ISO from the CD-ROM,
-   runs `proxmox_install` from it (same as `site.yml`, air-gapped), moves the IP to a `vmbr0` bridge,
-   and turns the rest of the disk into the `local-lvm` thin pool.
+Both need a root password hash for the new nodes (`openssl passwd -6`; also the web UI login).
+Ansible logs in to them as root with your SSH key (`~/.ssh/id_ed25519.pub` by default, see
+`proxmox_autoinstall_ssh_public_key`). `group_vars/proxmox.yml` (CIS mount check, auditd) applies to
+the new nodes too.
 
-Needs on the Proxmox server (in storage `local`, i.e. `/var/lib/vz/template/iso/`):
+### As VMs on a Proxmox server (`vm.yml`)
 
-- the Debian 13 **DVD** ISO (`debian-13.x.y-amd64-DVD-1.iso`; netinst needs a mirror), and
-- the Proxmox VE ISO (`proxmox-ve_9.2-1.iso`).
+1. **On the server** (inventory group `hypervisor`): for each entry in `proxmox_autoinstall_nodes`,
+   creates the VM (CPU type `host` for nested virtualization), boots the Debian installer directly
+   with the preseed file in its initrd, and installs Debian. All VMs install in parallel. When an
+   install is done the VM powers off; the role boots it from its disk with the Proxmox ISO in its
+   CD-ROM drive.
+2. **On each new VM**: `node.yml`, after copying the Proxmox ISO from the CD-ROM.
+
+Needs, on the Proxmox server in storage `local` (`/var/lib/vz/template/iso/`): the Debian 13 DVD ISO
+(`debian-13.x.y-amd64-DVD-1.iso`) and the Proxmox VE ISO (`proxmox-ve_9.2-1.iso`).
 
 ```sh
 cp inventory.ini.example inventory.ini     # [hypervisor]: your Proxmox server, as root
-openssl passwd -6                          # root password hash for the new nodes
 $EDITOR group_vars/hypervisor.yml          # ISOs, password hash, VMs (vmid, name, address, gateway)
-$EDITOR group_vars/proxmox.yml             # CIS mount check, auditd (applies to the new nodes too)
 ansible-playbook vm.yml
 ```
 
-Ansible logs in to the new nodes as root with your SSH key (`~/.ssh/id_ed25519.pub` by default, see
-`proxmox_vm_ssh_public_key`). The web UI login is `root` with the password whose hash you set.
+If the server can't run VMs with hardware virtualization (e.g. it is itself a VM without nested
+virtualization), set `kvm: false` on the VM: it then runs fully emulated, which works but is many
+times slower. If the controller can't reach the VMs' network (e.g. a NAT bridge on the server), set
+`proxmox_autoinstall_ssh_jump` (e.g. `root@pve-host`).
 
-Disk layout of each VM (sizes in `proxmox_vm_partitions`, GiB; default disk 100 GiB):
+### On bare-metal servers (`baremetal.yml`)
+
+1. **On the build host** (inventory group `builder`, the controller by default; needs `xorriso` and
+   ~6 GB per server): builds one ISO per server, `files/autoinstall/pve-autoinstall-<name>.iso`: the
+   Debian DVD with the server's preseed file, a boot menu that starts the install by itself (BIOS
+   and UEFI) and the Proxmox ISO inside.
+2. **You boot each server from its ISO**: write it to a USB stick (`dd if=<iso> of=/dev/<stick>
+   bs=4M`) or attach it as BMC virtual media (iDRAC, iLO, IPMI). Debian installs on the disk given as
+   `disk` (**erased**, check with `lsblk`), copies the Proxmox ISO from the media, and the server
+   powers off. **Remove the ISO before powering it on again**, or it reinstalls.
+3. **Meanwhile the play waits** (up to `proxmox_autoinstall_baremetal_wait`, default 4 h) for each
+   server to answer over SSH, then runs `node.yml` on it.
+
+Put the Debian DVD and Proxmox ISOs in `files/` (or set their paths), then:
+
+```sh
+cp inventory.ini.example inventory.ini     # [builder] localhost is enough
+$EDITOR group_vars/builder.yml             # password hash, servers (name, address, gateway, disk)
+ansible-playbook baremetal.yml             # builds the ISOs, then waits for the servers
+```
+
+The ISOs contain the root password hash and your SSH public key: keep them like secrets. If the
+servers boot from their disk after the install anyway (typical with UEFI, where the installer puts
+Debian first in the boot order), `proxmox_autoinstall_baremetal_reboot: true` reboots instead of
+powering off.
+
+### Disk layout
+
+Sizes in `proxmox_autoinstall_partitions` (GiB); the default VM disk is 100 GiB:
 
 | Mount | Size | Options |
 |---|---|---|
+| `/boot/efi` (UEFI only) | 0.5 | |
 | `/boot` (partition) | 1 | nodev, nosuid |
 | `/` | 20 | |
 | `/home` | 2 | nodev, nosuid |
@@ -106,10 +144,13 @@ Disk layout of each VM (sizes in `proxmox_vm_partitions`, GiB; default disk 100 
 | swap | 4 | |
 | thin pool `pve/data` (`local-lvm`) | rest | |
 
-Re-running is safe: existing VMs are not touched (only `proxmox_install` runs again on them). To
-rebuild one, delete it on the server (`qm stop <vmid>; qm destroy <vmid>`) and remove its old SSH
-host key (`ssh-keygen -R <ip>`). If an install doesn't finish within `proxmox_vm_install_timeout`
-(default 1 h), the installer is waiting on a question: open the VM's console in the web UI.
+### Re-running and troubleshooting
+
+Re-running is safe: existing VMs and installed servers are not reinstalled (only `node.yml` runs
+again). To rebuild a VM, delete it on the server (`qm stop <vmid>; qm destroy <vmid>`); for any
+reinstalled node, remove its old SSH host key (`ssh-keygen -R <ip>`). If a VM install doesn't finish
+within `proxmox_autoinstall_install_timeout` (default 1 h), the installer is waiting on a question:
+open the VM's console in the web UI (on bare metal: the server's console).
 
 ## Role variables (`proxmox_install`)
 
@@ -118,6 +159,9 @@ host key (`ssh-keygen -R <ip>`). If an install doesn't finish within `proxmox_vm
 | `proxmox_install_iso_path` | `""` | Proxmox VE ISO on the host, used as the only package source; empty = repositories |
 | `proxmox_install_iso_store` | `/var/lib/proxmox-iso/proxmox-ve.iso` | Where the ISO is moved to (on disk, survives reboots) |
 | `proxmox_install_iso_mount` | `/mnt/pve-iso` | Where the ISO is mounted (also at boot, via `/etc/fstab`) |
+| `proxmox_install_debian_iso_path` | `""` | Debian 13 DVD ISO on the host: second package source (auditd, sudo, ...) |
+| `proxmox_install_debian_iso_store` | `/var/lib/proxmox-iso/debian-dvd.iso` | Where the DVD is moved to |
+| `proxmox_install_debian_iso_mount` | `/mnt/debian-iso` | Where the DVD is mounted |
 | `proxmox_install_iso_disable_other_sources` | `true` | With the ISO, disable the host's other apt sources (backups kept) |
 | `proxmox_install_local_debs_dir` | `""` | Directory on the controller with extra `.deb` files to install (e.g. auditd) |
 | `proxmox_install_debian_sources` | `""` (keep host's) | Debian repositories as deb822 content; also empties `sources.list` |
@@ -155,7 +199,17 @@ What the role does with it:
 - Disables the host's other apt sources (internet mirrors, the Debian DVD), which can't be reached
   and would make `apt update` fail. `sources.list` is kept as `sources.list.pre-pve-iso`.
 
-Packages that aren't on the ISO, such as `auditd` (and `sudo`), have to be brought in as `.deb` files.
+The Proxmox ISO only holds what Proxmox VE needs (~860 packages). For other Debian packages, such as
+`auditd` or `sudo`, copy the **Debian 13 DVD** (`debian-13.x.y-amd64-DVD-1.iso`, ~4 GB, several
+thousand packages, signed by Debian) to the host as well and set
+`proxmox_install_debian_iso_path: /tmp/debian-13.7.0-amd64-DVD-1.iso`. It's kept and mounted like the
+Proxmox ISO (`/mnt/debian-iso`) and added as a second source, pinned below the Proxmox ISO so
+Proxmox's exact-version dependencies keep winning.
+
+`apt update` prints `N: Missing Signed-By ...` for the Proxmox ISO's repositories: a notice, not an
+error. They are unsigned on the ISO, so they're marked trusted instead.
+
+Without the DVD, packages that aren't on the Proxmox ISO have to be brought in as `.deb` files.
 On a machine with internet access and Debian 13, download them with their dependencies, copy the
 directory next to the playbook and point the role at it:
 

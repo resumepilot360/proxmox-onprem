@@ -1,0 +1,86 @@
+# Creates one VM that boots the Debian installer kernel directly, with the preseed file in its initrd.
+# Skipped when the VM already exists.
+- name: "Settings for {{ proxmox_autoinstall_item.name }}"
+  set_fact:
+    proxmox_autoinstall_cfg: "{{ proxmox_autoinstall_defaults | combine(proxmox_autoinstall_item) }}"
+    proxmox_autoinstall_dir: "{{ proxmox_autoinstall_workdir }}/{{ proxmox_autoinstall_item.vmid }}"
+
+- name: "Check whether VM {{ proxmox_autoinstall_cfg.vmid }} exists"
+  command: qm status {{ proxmox_autoinstall_cfg.vmid }}
+  register: proxmox_autoinstall_status
+  changed_when: false
+  failed_when: false
+
+- name: "Create and start VM {{ proxmox_autoinstall_cfg.vmid }}"
+  when: proxmox_autoinstall_status.rc != 0
+  block:
+    - name: "Create the working directory"
+      file:
+        path: "{{ proxmox_autoinstall_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: "Copy the installer kernel and initrd from the Debian ISO"
+      shell: |
+        set -e
+        m=$(mktemp -d)
+        mount -o loop,ro {{ proxmox_autoinstall_iso_paths.results[0].stdout | quote }} "$m"
+        trap 'umount "$m"; rmdir "$m"' EXIT
+        cp "$m/install.amd/vmlinuz" "$m/install.amd/initrd.gz" {{ proxmox_autoinstall_dir | quote }}/
+      args:
+        creates: "{{ proxmox_autoinstall_dir }}/vmlinuz"
+
+    - name: "Write the preseed file"
+      template:
+        src: preseed.cfg.j2
+        dest: "{{ proxmox_autoinstall_dir }}/preseed.cfg"
+        mode: "0600"
+
+    # The kernel unpacks concatenated cpio archives, so the preseed file can be appended to the initrd.
+    - name: "Add the preseed file to the initrd"
+      shell: |
+        set -eo pipefail
+        cd {{ proxmox_autoinstall_dir | quote }}
+        cp initrd.gz initrd-preseed.gz
+        echo preseed.cfg | cpio -H newc -o --quiet | gzip >> initrd-preseed.gz
+      args:
+        executable: /bin/bash
+        creates: "{{ proxmox_autoinstall_dir }}/initrd-preseed.gz"
+
+    - name: "Create VM {{ proxmox_autoinstall_cfg.vmid }}"
+      command:
+        argv:
+          - qm
+          - create
+          - "{{ proxmox_autoinstall_cfg.vmid }}"
+          - --name
+          - "{{ proxmox_autoinstall_cfg.name }}"
+          - --ostype
+          - l26
+          - --machine
+          - q35
+          # "host" passes the CPU's virtualization extensions through, for VMs inside the node.
+          # Without KVM, "max" is the emulated CPU with the most features.
+          - --cpu
+          - "{{ 'host' if proxmox_autoinstall_cfg.kvm | bool else 'max' }}"
+          - --kvm
+          - "{{ 1 if proxmox_autoinstall_cfg.kvm | bool else 0 }}"
+          - --cores
+          - "{{ proxmox_autoinstall_cfg.cores }}"
+          - --memory
+          - "{{ proxmox_autoinstall_cfg.memory }}"
+          - --scsihw
+          - virtio-scsi-single
+          - --scsi0
+          - "{{ proxmox_autoinstall_cfg.disk_storage }}:{{ proxmox_autoinstall_cfg.disk_size }},iothread=1,discard=on"
+          - --net0
+          - "virtio,bridge={{ proxmox_autoinstall_cfg.bridge }}{{ (',tag=' ~ proxmox_autoinstall_cfg.vlan) if proxmox_autoinstall_cfg.vlan | string | length > 0 else '' }}"
+          - --ide2
+          - "{{ proxmox_autoinstall_debian_iso }},media=cdrom"
+          - --boot
+          - order=scsi0;ide2
+          - --args
+          - "-kernel {{ proxmox_autoinstall_dir }}/vmlinuz -initrd {{ proxmox_autoinstall_dir }}/initrd-preseed.gz -append 'auto=true priority=critical ---'"
+
+    - name: "Start VM {{ proxmox_autoinstall_cfg.vmid }}"
+      command: qm start {{ proxmox_autoinstall_cfg.vmid }}

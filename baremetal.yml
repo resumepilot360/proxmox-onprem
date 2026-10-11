@@ -1,0 +1,16 @@
+# One run from nothing to Proxmox VE on bare-metal servers:
+# 1. on the build host (group "builder", the controller by default): build one bootable ISO per
+#    server: the Debian DVD with the server's preseed file and the Proxmox ISO inside (role
+#    proxmox_autoinstall, target baremetal). Boot each server from its ISO (USB or BMC virtual
+#    media): Debian 13 installs unattended with CIS partitions, then the server powers off;
+# 2. remove the ISO and power the server on. The play waits for it and installs Proxmox VE (node.yml).
+# Settings: group_vars/builder.yml (the servers) and group_vars/proxmox.yml (the Proxmox install).
+- name: "Build the install ISOs"
+  hosts: builder
+  vars:
+    proxmox_autoinstall_target: baremetal
+  roles:
+    - proxmox_autoinstall
+
+- name: "Install Proxmox VE"
+  import_playbook: node.yml

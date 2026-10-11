@@ -1,0 +1,67 @@
+# Builds the ISO for one server. Rebuilt when its preseed file changes.
+- name: "Settings for {{ proxmox_autoinstall_item.name }}"
+  set_fact:
+    proxmox_autoinstall_cfg: "{{ proxmox_autoinstall_defaults | combine(proxmox_autoinstall_item) }}"
+    proxmox_autoinstall_dir: "{{ proxmox_autoinstall_iso_output_dir }}/build/{{ proxmox_autoinstall_item.name }}"
+    proxmox_autoinstall_iso: "{{ proxmox_autoinstall_iso_output_dir }}/pve-autoinstall-{{ proxmox_autoinstall_item.name }}.iso"
+
+- name: "Create the build directory for {{ proxmox_autoinstall_cfg.name }}"
+  file:
+    path: "{{ proxmox_autoinstall_dir }}"
+    state: directory
+    mode: "0700"
+
+- name: "Write the boot files for {{ proxmox_autoinstall_cfg.name }}"
+  template:
+    src: "{{ item.src }}"
+    dest: "{{ proxmox_autoinstall_dir }}/{{ item.dest }}"
+    mode: "0600"
+  loop:
+    - {src: preseed.cfg.j2, dest: preseed.cfg}
+    - {src: isolinux.cfg.j2, dest: isolinux.cfg}
+    - {src: grub.cfg.j2, dest: grub.cfg}
+  register: proxmox_autoinstall_boot_files
+
+- name: "Check for the ISO of {{ proxmox_autoinstall_cfg.name }}"
+  stat:
+    path: "{{ proxmox_autoinstall_iso }}"
+    get_checksum: false
+  register: proxmox_autoinstall_iso_stat
+
+- name: "Build the ISO of {{ proxmox_autoinstall_cfg.name }}"
+  when: proxmox_autoinstall_boot_files is changed or not proxmox_autoinstall_iso_stat.stat.exists
+  block:
+    - name: "Remove the old ISO"
+      file:
+        path: "{{ proxmox_autoinstall_iso }}"
+        state: absent
+    # "-boot_image any replay" keeps the DVD's BIOS (isolinux) and UEFI boot setup; the files mapped
+    # in replace its boot menus. md5sum.txt no longer matches, which only matters for the optional
+    # media check in the installer menu.
+    - name: "Write the ISO"
+      command:
+        argv:
+          - xorriso
+          - -indev
+          - "{{ proxmox_autoinstall_debian_iso_file }}"
+          - -outdev
+          - "{{ proxmox_autoinstall_iso }}"
+          - -boot_image
+          - any
+          - replay
+          - -map
+          - "{{ proxmox_autoinstall_dir }}/preseed.cfg"
+          - /preseed.cfg
+          - -map
+          - "{{ proxmox_autoinstall_dir }}/isolinux.cfg"
+          - /isolinux/isolinux.cfg
+          - -map
+          - "{{ proxmox_autoinstall_dir }}/grub.cfg"
+          - /boot/grub/grub.cfg
+          - -map
+          - "{{ proxmox_autoinstall_pve_iso_file }}"
+          - /pve/proxmox-ve.iso
+    - name: "Restrict the ISO (it holds the root password hash)"
+      file:
+        path: "{{ proxmox_autoinstall_iso }}"
+        mode: "0600"

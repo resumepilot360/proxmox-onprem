@@ -1,0 +1,63 @@
+# Keeps one ISO file on disk and mounts it (now and at boot). Parameters:
+# proxmox_install_isofile_name (for messages), _src (where it was put, e.g. /tmp), _store (where it
+# is kept) and _mount (mount point).
+- name: "Find the {{ proxmox_install_isofile_name }}"
+  stat:
+    path: "{{ item }}"
+    get_checksum: false
+  loop:
+    - "{{ proxmox_install_isofile_src }}"
+    - "{{ proxmox_install_isofile_store }}"
+  register: proxmox_install_isofile_stat
+
+- name: "Check that the {{ proxmox_install_isofile_name }} is there"
+  assert:
+    that: proxmox_install_isofile_stat.results | selectattr('stat.exists') | list | length > 0
+    fail_msg: "No {{ proxmox_install_isofile_name }} at {{ proxmox_install_isofile_src }} (or {{ proxmox_install_isofile_store }} from an earlier run)."
+    quiet: true
+
+# /tmp is a tmpfs on Debian 13 and is emptied by the reboot into the Proxmox kernel, so the ISO is
+# moved to disk first and mounted from there (also at boot).
+- name: "Keep the {{ proxmox_install_isofile_name }} on disk"
+  when: not proxmox_install_isofile_stat.results[1].stat.exists
+  block:
+    - name: "Create the ISO directory"
+      file:
+        path: "{{ proxmox_install_isofile_store | dirname }}"
+        state: directory
+        mode: "0755"
+    - name: "Check free space for the ISO"
+      shell: |
+        set -o pipefail
+        df --output=avail -B1 {{ proxmox_install_isofile_store | dirname | quote }} | tail -1
+      args:
+        executable: /bin/bash
+      register: proxmox_install_isofile_free
+      changed_when: false
+    - name: "Assert there is room for the ISO"
+      assert:
+        that: proxmox_install_isofile_free.stdout | int > proxmox_install_isofile_stat.results[0].stat.size + 536870912
+        fail_msg: >-
+          Not enough space in {{ proxmox_install_isofile_store | dirname }} for the ISO
+          ({{ proxmox_install_isofile_stat.results[0].stat.size | human_readable }} + 512 MiB needed).
+          Set proxmox_install_isofile_store to a filesystem with more room.
+        quiet: true
+    - name: "Move the ISO out of {{ proxmox_install_isofile_src | dirname }}"
+      command: mv {{ proxmox_install_isofile_src | quote }} {{ proxmox_install_isofile_store | quote }}
+      args:
+        creates: "{{ proxmox_install_isofile_store }}"
+
+- name: "Mount the {{ proxmox_install_isofile_name }} at boot"
+  lineinfile:
+    path: /etc/fstab
+    regexp: '^\S+\s+{{ proxmox_install_isofile_mount | regex_escape }}\s'
+    line: "{{ proxmox_install_isofile_store }} {{ proxmox_install_isofile_mount }} iso9660 loop,ro,nofail 0 0"
+# The mount point is created here, not with the file module: once the ISO is mounted on it, it is
+# read-only and setting its mode fails on re-runs.
+- name: "Mount the {{ proxmox_install_isofile_name }}"
+  shell: |
+    findmnt -n {{ proxmox_install_isofile_mount | quote }} >/dev/null && exit 0
+    mkdir -p {{ proxmox_install_isofile_mount | quote }}
+    mount {{ proxmox_install_isofile_mount | quote }} && echo mounted
+  register: proxmox_install_isofile_mounted
+  changed_when: "'mounted' in proxmox_install_isofile_mounted.stdout"

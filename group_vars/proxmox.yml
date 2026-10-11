@@ -5,7 +5,11 @@
 # packages then come from the ISO; no mirror or internet is needed and the settings below are ignored.
 proxmox_install_iso_path: /tmp/proxmox-ve_9.2-1.iso
 
-# Packages that aren't on the ISO, e.g. auditd (see README). Path on the controller.
+# Debian packages that aren't on the Proxmox ISO (auditd, sudo, ...): also copy the Debian 13 DVD to
+# the host and point to it (~4 GB more on disk). It becomes a second package source.
+# proxmox_install_debian_iso_path: /tmp/debian-13.7.0-amd64-DVD-1.iso
+
+# Or single packages as .deb files (see README). Path on the controller.
 # proxmox_install_local_debs_dir: files/debs
 
 # --- Repositories (only without proxmox_install_iso_path) ----------------------------------------
@@ -40,8 +44,8 @@ proxmox_install_required_mounts:
   /var/log: [nodev, nosuid, noexec]
   /var/log/audit: [nodev, nosuid, noexec]
 
-# auditd (CIS) isn't on the Proxmox VE ISO: enable it once its .deb files are in
-# proxmox_install_local_debs_dir (see README).
+# auditd (CIS) isn't on the Proxmox VE ISO: enable it with the Debian DVD
+# (proxmox_install_debian_iso_path) or its .deb files in proxmox_install_local_debs_dir.
 proxmox_install_auditd_enabled: false
 
 # --- Networking and storage --------------------------------------------------------------------

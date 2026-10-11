@@ -81,7 +81,9 @@
   environment:
     DEBIAN_FRONTEND: noninteractive
   register: proxmox_install_iso_upgrade
-  changed_when: proxmox_install_iso_upgrade.stdout is not search('0 upgraded, 0 newly installed, 0 downgraded, 0 to remove')
+  # dpkg's progress lines appear only when something was installed, downgraded or removed
+  # (apt's summary line differs between apt versions).
+  changed_when: proxmox_install_iso_upgrade.stdout is search('^(Unpacking|Removing|Setting up) ', multiline=True)
   when: proxmox_install_iso_path | length > 0
 
 - name: "Install packages from the controller"

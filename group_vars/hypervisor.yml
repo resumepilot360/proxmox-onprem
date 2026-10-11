@@ -2,14 +2,14 @@
 
 # Both ISOs must be on the server, e.g. in storage "local" (/var/lib/vz/template/iso/).
 # Use the Debian DVD (debian-13.x.y-amd64-DVD-1.iso), not netinst: it installs without a mirror.
-proxmox_vm_debian_iso: local:iso/debian-13.7.0-amd64-DVD-1.iso
-proxmox_vm_pve_iso: local:iso/proxmox-ve_9.2-1.iso
+proxmox_autoinstall_debian_iso: local:iso/debian-13.7.0-amd64-DVD-1.iso
+proxmox_autoinstall_pve_iso: local:iso/proxmox-ve_9.2-1.iso
 
 # Root password of the new nodes (also the web UI login) as a hash: openssl passwd -6
-# Better in a vault: ansible-vault encrypt_string '<hash>' --name proxmox_vm_root_password_hash
-proxmox_vm_root_password_hash: ""
+# Better in a vault: ansible-vault encrypt_string '<hash>' --name proxmox_autoinstall_root_password_hash
+proxmox_autoinstall_root_password_hash: ""
 
-proxmox_vm_guests:
+proxmox_autoinstall_nodes:
   - vmid: 201
     name: pve-vm1
     address: 192.168.10.31/24
@@ -17,8 +17,9 @@ proxmox_vm_guests:
     # memory: 16384
     # disk_size: 200
 
-# Defaults for every VM; override per VM above.
-# proxmox_vm_defaults:
+# Defaults for every VM; override per VM above (a dict here replaces all of them).
+# proxmox_autoinstall_defaults:
+#   disk: /dev/sda
 #   memory: 8192
 #   cores: 4
 #   disk_storage: local-lvm

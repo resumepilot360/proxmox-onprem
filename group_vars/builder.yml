@@ -1,0 +1,30 @@
+# The build host for bare-metal installs (baremetal.yml) and the servers to install.
+
+# ISO files on the build host. Use the Debian DVD (debian-13.x.y-amd64-DVD-1.iso), not netinst.
+proxmox_autoinstall_debian_iso_file: "{{ playbook_dir }}/files/debian-13.7.0-amd64-DVD-1.iso"
+proxmox_autoinstall_pve_iso_file: "{{ playbook_dir }}/files/proxmox-ve_9.2-1.iso"
+# One ISO per server is written here (~6 GB each; they hold the root password hash: keep them safe).
+proxmox_autoinstall_iso_output_dir: "{{ playbook_dir }}/files/autoinstall"
+
+# Root password of the new nodes (also the web UI login) as a hash: openssl passwd -6
+# Better in a vault: ansible-vault encrypt_string '<hash>' --name proxmox_autoinstall_root_password_hash
+proxmox_autoinstall_root_password_hash: ""
+
+proxmox_autoinstall_nodes:
+  - name: pve-01
+    address: 192.168.10.41/24
+    gateway: 192.168.10.1
+    # The disk to install on: ERASED. Check with lsblk on the server (e.g. /dev/sda, /dev/nvme0n1).
+    disk: /dev/sda
+    # nameservers: "192.168.10.1"
+
+# Partition sizes in GiB (the rest of the disk becomes local-lvm).
+# proxmox_autoinstall_partitions:
+#   root: 20
+#   swap: 4
+#   home: 2
+#   tmp: 4
+#   var: 20
+#   var_tmp: 4
+#   var_log: 8
+#   var_log_audit: 4
