@@ -1,0 +1,4 @@
+# Copy to inventory.ini. One line per Debian 13 host to turn into a Proxmox VE node.
+# The user needs sudo; add ansible_become_password via a vault or --ask-become-pass if sudo needs a password.
+[proxmox]
+pve-a ansible_host=192.168.10.21 ansible_user=admin

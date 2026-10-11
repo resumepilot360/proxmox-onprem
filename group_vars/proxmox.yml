@@ -1,0 +1,42 @@
+# Settings for all hosts in [proxmox]. Override per host in host_vars/<name>.yml.
+
+# --- Repositories ------------------------------------------------------------------------------
+# Air-gapped: point both repositories at your local mirror (e.g. proxmox-offline-mirror or aptly
+# behind nginx) and ship the Proxmox keyring from the controller. Leave these unset to use the internet.
+#
+# proxmox_install_debian_sources: |
+#   Types: deb
+#   URIs: http://mirror.example.internal/debian
+#   Suites: trixie trixie-updates
+#   Components: main contrib non-free-firmware
+#   Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+#
+#   Types: deb
+#   URIs: http://mirror.example.internal/debian-security
+#   Suites: trixie-security
+#   Components: main contrib non-free-firmware
+#   Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+#
+# proxmox_install_pve_repo_url: http://mirror.example.internal/proxmox/pve
+# proxmox_install_keyring_src: files/proxmox-archive-keyring-trixie.gpg
+
+# --- CIS / hardening --------------------------------------------------------------------------
+# Fail the run if the partitions made by the Debian installer lack the CIS mount options.
+# Remove entries for mount points your layout doesn't have.
+proxmox_install_required_mounts:
+  /tmp: [nodev, nosuid, noexec]
+  /dev/shm: [nodev, nosuid, noexec]
+  /home: [nodev, nosuid]
+  /var: [nodev, nosuid]
+  /var/tmp: [nodev, nosuid, noexec]
+  /var/log: [nodev, nosuid, noexec]
+  /var/log/audit: [nodev, nosuid, noexec]
+
+proxmox_install_auditd_enabled: true
+
+# --- Networking and storage --------------------------------------------------------------------
+# Usually set per host in host_vars/<name>.yml (see README): interface names and IPs differ per node.
+# proxmox_install_network_interfaces: |
+#   ...
+# proxmox_install_storage_cfg: |
+#   ...

@@ -1,0 +1,30 @@
+# Fails the run if a required mount point is missing or lacks an option, both live and in /etc/fstab.
+- name: "Read live mount options"
+  command: "findmnt --kernel --noheadings --output OPTIONS --mountpoint {{ item.key }}"
+  loop: "{{ proxmox_install_required_mounts | dict2items }}"
+  register: proxmox_install_mounts_live
+  changed_when: false
+  failed_when: false
+
+- name: "Read /etc/fstab mount options"
+  command: "findmnt --fstab --noheadings --output OPTIONS --mountpoint {{ item.key }}"
+  loop: "{{ proxmox_install_required_mounts | dict2items }}"
+  register: proxmox_install_mounts_fstab
+  changed_when: false
+  failed_when: false
+
+- name: "Check mount points and options"
+  assert:
+    that:
+      - item.0.rc == 0
+      - item.1.rc == 0
+      - item.0.item.value | difference(item.0.stdout.split(',')) | length == 0
+      - item.0.item.value | difference(item.1.stdout.split(',')) | length == 0
+    fail_msg: >-
+      {{ item.0.item.key }} must be a separate mount with {{ item.0.item.value | join(',') }}
+      (live: {{ item.0.stdout | default('not mounted', true) }},
+      fstab: {{ item.1.stdout | default('no entry', true) }})
+    quiet: true
+  loop: "{{ proxmox_install_mounts_live.results | zip(proxmox_install_mounts_fstab.results) | list }}"
+  loop_control:
+    label: "{{ item.0.item.key }}"

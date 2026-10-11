@@ -1,0 +1,3 @@
+- name: "Reload networking"
+  command: ifreload -a
+  listen: proxmox_install_network_reload

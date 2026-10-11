@@ -1,0 +1,148 @@
+# Installs Proxmox VE 9 on an existing Debian 13 (trixie) host, following the official
+# "Install Proxmox VE on Debian 13 Trixie" steps. Partitioning is left as it is.
+# All packages come from the repositories configured below, so it works air-gapped with local mirrors.
+- name: "Check that the host runs Debian 13 on amd64"
+  assert:
+    that:
+      - ansible_facts.distribution == "Debian"
+      - ansible_facts.distribution_major_version == "13"
+      - ansible_facts.architecture == "x86_64"
+    fail_msg: "Proxmox VE 9 needs Debian 13 (trixie) on amd64."
+    quiet: true
+
+# Proxmox needs the hostname to resolve to the node's real IP, not 127.0.1.1.
+- name: "Remove the 127.0.1.1 hostname entry"
+  lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.1\.1\s'
+    state: absent
+- name: "Resolve the hostname to the node IP"
+  lineinfile:
+    path: /etc/hosts
+    regexp: '^\S+\s+{{ ansible_facts.hostname }}(\.\S+)?(\s|$)'
+    line: >-
+      {{ proxmox_install_node_ip }}
+      {{ ansible_facts.hostname }}.{{ proxmox_install_domain }} {{ ansible_facts.hostname }}
+
+- name: "Use the given Debian repositories"
+  when: proxmox_install_debian_sources | length > 0
+  block:
+    - name: "Write debian.sources"
+      copy:
+        content: "{{ proxmox_install_debian_sources }}"
+        dest: /etc/apt/sources.list.d/debian.sources
+        mode: "0644"
+    # The installer's sources.list often points to the install media or the internet.
+    - name: "Empty the legacy sources.list"
+      copy:
+        content: "# Replaced by /etc/apt/sources.list.d/debian.sources (Ansible).\n"
+        dest: /etc/apt/sources.list
+        mode: "0644"
+
+- name: "Install the Proxmox archive keyring from the controller"
+  copy:
+    src: "{{ proxmox_install_keyring_src }}"
+    dest: /usr/share/keyrings/proxmox-archive-keyring.gpg
+    mode: "0644"
+  when: proxmox_install_keyring_src | length > 0
+- name: "Download the Proxmox archive keyring"
+  get_url:
+    url: "{{ proxmox_install_keyring_url }}"
+    dest: /usr/share/keyrings/proxmox-archive-keyring.gpg
+    mode: "0644"
+  when: proxmox_install_keyring_src | length == 0
+
+- name: "Add the Proxmox VE repository"
+  copy:
+    content: |
+      Types: deb
+      URIs: {{ proxmox_install_pve_repo_url }}
+      Suites: trixie
+      Components: {{ proxmox_install_pve_repo_component }}
+      Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
+    dest: /etc/apt/sources.list.d/pve-install-repo.sources
+    mode: "0644"
+
+- name: "Upgrade the system"
+  apt:
+    update_cache: true
+    upgrade: full
+
+- name: "Preseed postfix"
+  debconf:
+    name: postfix
+    question: "{{ item.question }}"
+    vtype: "{{ item.vtype }}"
+    value: "{{ item.value }}"
+  loop:
+    - {question: postfix/main_mailer_type, vtype: select, value: "Local only"}
+    - {question: postfix/mailname, vtype: string, value: "{{ ansible_facts.hostname }}.{{ proxmox_install_domain }}"}
+
+# grub-pc fails non-interactively when it has no install device, e.g. on cloud images that
+# boot with grub-cloud-amd64. Hosts installed with the Debian installer already have one.
+- name: "Give grub-pc an install device if it has none"
+  shell: |
+    set -euo pipefail
+    [ -d /sys/firmware/efi ] && exit 0
+    if debconf-show grub-pc 2>/dev/null | grep -Eq 'grub-pc/install_devices: \S'; then exit 0; fi
+    disk=$(lsblk -no PKNAME "$(findmnt -no SOURCE /boot 2>/dev/null || findmnt -no SOURCE /)" | tail -1)
+    echo "grub-pc grub-pc/install_devices multiselect /dev/$disk" | debconf-set-selections
+    echo "set"
+  args:
+    executable: /bin/bash
+  register: proxmox_install_grub
+  changed_when: "'set' in proxmox_install_grub.stdout"
+
+- name: "Install the Proxmox kernel"
+  apt:
+    name: proxmox-default-kernel
+    state: present
+
+- name: "Reboot into the Proxmox kernel"
+  reboot:
+    reboot_timeout: 900
+  when: not ansible_facts.kernel.endswith('-pve')
+
+- name: "Install Proxmox VE"
+  apt:
+    name:
+      - proxmox-ve
+      - postfix
+      - open-iscsi
+      - chrony
+    state: present
+
+# The install adds the enterprise repositories; they need a subscription and internet access.
+- name: "Find the Proxmox enterprise repositories"
+  stat:
+    path: "/etc/apt/sources.list.d/{{ item }}"
+  loop:
+    - pve-enterprise.sources
+    - ceph.sources
+  register: proxmox_install_enterprise_repos
+- name: "Disable the Proxmox enterprise repositories"
+  lineinfile:
+    path: "{{ item.stat.path }}"
+    regexp: '^Enabled:'
+    line: "Enabled: no"
+    insertafter: '^Types:'
+  loop: "{{ proxmox_install_enterprise_repos.results | selectattr('stat.exists') | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: proxmox_install_disable_enterprise_repo
+
+- name: "Find Debian kernels"
+  package_facts:
+- name: "Remove the Debian kernels and os-prober"
+  apt:
+    name: "{{ proxmox_install_debian_kernels }}"
+    state: absent
+  vars:
+    proxmox_install_debian_kernels: >-
+      {{ ansible_facts.packages.keys()
+         | select('match', '^(linux-image-(amd64|cloud-amd64|6\.\d+.*)|os-prober)$') | list }}
+  when: proxmox_install_debian_kernels | length > 0
+  register: proxmox_install_kernels_removed
+- name: "Update grub"
+  command: update-grub
+  when: proxmox_install_kernels_removed is changed

@@ -1,0 +1,30 @@
+# Debian repositories as deb822 content, e.g. a local mirror. Empty: keep the host's sources.
+proxmox_install_debian_sources: ""
+
+# Proxmox VE repository (a local mirror when air-gapped).
+proxmox_install_pve_repo_url: "http://download.proxmox.com/debian/pve"
+proxmox_install_pve_repo_component: pve-no-subscription
+
+# Proxmox archive keyring: a file on the controller (air-gapped), otherwise downloaded from the URL.
+proxmox_install_keyring_src: ""
+proxmox_install_keyring_url: "https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg"
+
+# The enterprise repositories need a subscription and internet access.
+proxmox_install_disable_enterprise_repo: true
+
+# /etc/hosts entry for the node: Proxmox needs the hostname to resolve to this IP.
+proxmox_install_node_ip: "{{ ansible_facts.default_ipv4.address }}"
+proxmox_install_domain: "{{ ansible_facts.domain | default('localdomain', true) }}"
+
+# Mount points that must exist with at least these options (checked live and in /etc/fstab).
+# Empty: no check.
+proxmox_install_required_mounts: {}
+
+# Install and enable auditd (audit rules are not managed).
+proxmox_install_auditd_enabled: false
+
+# Full content of /etc/network/interfaces, e.g. with a vmbr0 bridge for guests. Empty: not managed.
+proxmox_install_network_interfaces: ""
+
+# Full content of /etc/pve/storage.cfg. Empty: not managed (Proxmox default: "local" in /var/lib/vz).
+proxmox_install_storage_cfg: ""

@@ -1,0 +1,6 @@
+# Replaces /etc/pve/storage.cfg, so list every storage the node should have.
+- name: "Write /etc/pve/storage.cfg"
+  copy:
+    content: "{{ proxmox_install_storage_cfg }}"
+    dest: /etc/pve/storage.cfg
+    mode: "0640"

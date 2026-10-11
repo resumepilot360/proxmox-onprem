@@ -1,0 +1,12 @@
+- name: "Install auditd"
+  apt:
+    name:
+      - auditd
+      - audispd-plugins
+    state: present
+
+- name: "Enable auditd"
+  systemd_service:
+    name: auditd.service
+    state: started
+    enabled: true

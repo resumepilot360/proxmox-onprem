@@ -1,0 +1,9 @@
+# Turns existing Debian 13 hosts into Proxmox VE nodes. Partitioning is not touched:
+# it comes from the Debian installer.
+- name: Install and configure Proxmox VE
+  hosts: proxmox
+  become: true
+  # Reload networking even if a later task fails, so a written interfaces file is never left unapplied.
+  force_handlers: true
+  roles:
+    - proxmox_install

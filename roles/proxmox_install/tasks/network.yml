@@ -1,0 +1,8 @@
+# Replaces /etc/network/interfaces. Proxmox only lists bridges defined in this file (not sourced ones).
+- name: "Write /etc/network/interfaces"
+  copy:
+    content: "{{ proxmox_install_network_interfaces }}"
+    dest: /etc/network/interfaces
+    mode: "0644"
+    backup: true
+  notify: proxmox_install_network_reload
