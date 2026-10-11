@@ -1,3 +1,17 @@
+# Proxmox VE installer ISO on the host (e.g. /tmp/proxmox-ve_9.2-1.iso), used as the only package
+# source: no mirror or internet needed. Empty: use the repositories below.
+proxmox_install_iso_path: ""
+# Where the ISO is moved to (/tmp is emptied by the reboot) and mounted. Needs ~2 GB free.
+proxmox_install_iso_store: /var/lib/proxmox-iso/proxmox-ve.iso
+proxmox_install_iso_mount: /mnt/pve-iso
+# Disable the host's other apt sources (internet mirrors, the Debian DVD), which air-gapped can't be
+# reached and make "apt update" fail. Backups are kept.
+proxmox_install_iso_disable_other_sources: true
+
+# Directory on the controller with extra .deb files that aren't on the ISO (e.g. auditd), installed
+# before Proxmox VE. Empty: none.
+proxmox_install_local_debs_dir: ""
+
 # Debian repositories as deb822 content, e.g. a local mirror. Empty: keep the host's sources.
 proxmox_install_debian_sources: ""
 

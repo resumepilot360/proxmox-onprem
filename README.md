@@ -14,9 +14,13 @@ proxmox-onprem/
 
 ## Requirements
 
-- Debian 13 amd64, minimal install (no desktop / NetworkManager), static IP, SSH access with sudo.
+- Debian 13 amd64, minimal install (no desktop / NetworkManager), static IP, and a user that can log
+  in over SSH and become root, with `sudo` or with `su` and the root password.
 - For full VMs inside a VM: nested virtualization on the outer hypervisor (on Proxmox: CPU type `host`).
-- Air-gapped: reachable mirrors of the Debian (`trixie`, `trixie-updates`, `trixie-security`) and
+- Air-gapped, either:
+  - the Proxmox VE installer ISO (e.g. `proxmox-ve_9.2-1.iso`) copied to the host. Nothing else is
+    needed, see [Air-gapped with the ISO](#air-gapped-with-the-proxmox-ve-iso); or
+  - reachable mirrors of the Debian (`trixie`, `trixie-updates`, `trixie-security`) and
   Proxmox VE (`trixie` / `pve-no-subscription`) repositories, and the Proxmox archive keyring
   (`proxmox-archive-keyring-trixie.gpg`) on the controller. `proxmox-offline-mirror` from Proxmox can
   build both mirrors and move them across the air gap on removable media.
@@ -27,15 +31,18 @@ proxmox-onprem/
 git clone https://github.com/resumepilot360/proxmox-onprem.git
 cd proxmox-onprem
 cp inventory.ini.example inventory.ini        # add your hosts
-$EDITOR group_vars/proxmox.yml                # mirror URLs, keyring, mount check
-ansible-playbook site.yml                     # --ask-become-pass if sudo needs a password
+$EDITOR group_vars/proxmox.yml                # ISO path or mirrors, mount check
+ansible all -m ping                           # check SSH
+ansible-playbook site.yml --ask-become-pass   # root password (su) or your sudo password
 ```
 
 The `proxmox_install` role follows the official "Install Proxmox VE on Debian 13 Trixie" steps:
 
 1. Checks Debian 13 amd64 and makes the hostname resolve to the node IP in `/etc/hosts`.
-2. Sets up the Debian and Proxmox repositories (your mirrors if given) and the Proxmox keyring.
-3. Upgrades the system, installs the Proxmox kernel and reboots into it.
+2. Sets up the package source: the Proxmox VE ISO on the host, or the Debian and Proxmox
+   repositories (your mirrors if given) and the Proxmox keyring.
+3. Upgrades the system (with the ISO: to the ISO's versions), installs the Proxmox kernel and reboots
+   into it.
 4. Installs `proxmox-ve`, `postfix` (local only), `open-iscsi` and `chrony`, disables the enterprise
    repositories, and removes the Debian kernels and `os-prober`.
 
@@ -53,6 +60,11 @@ Afterwards the web UI is at `https://<host>:8006` (log in as `root`, realm *Linu
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `proxmox_install_iso_path` | `""` | Proxmox VE ISO on the host, used as the only package source; empty = repositories |
+| `proxmox_install_iso_store` | `/var/lib/proxmox-iso/proxmox-ve.iso` | Where the ISO is moved to (on disk, survives reboots) |
+| `proxmox_install_iso_mount` | `/mnt/pve-iso` | Where the ISO is mounted (also at boot, via `/etc/fstab`) |
+| `proxmox_install_iso_disable_other_sources` | `true` | With the ISO, disable the host's other apt sources (backups kept) |
+| `proxmox_install_local_debs_dir` | `""` | Directory on the controller with extra `.deb` files to install (e.g. auditd) |
 | `proxmox_install_debian_sources` | `""` (keep host's) | Debian repositories as deb822 content; also empties `sources.list` |
 | `proxmox_install_pve_repo_url` | `http://download.proxmox.com/debian/pve` | Proxmox VE repository or mirror |
 | `proxmox_install_pve_repo_component` | `pve-no-subscription` | Repository component |
@@ -65,6 +77,47 @@ Afterwards the web UI is at `https://<host>:8006` (log in as `root`, realm *Linu
 | `proxmox_install_auditd_enabled` | `false` | Install and enable `auditd` (rules not managed) |
 | `proxmox_install_network_interfaces` | `""` | Full `/etc/network/interfaces`; empty = not managed |
 | `proxmox_install_storage_cfg` | `""` | Full `/etc/pve/storage.cfg`; empty = not managed |
+
+## Air-gapped with the Proxmox VE ISO
+
+The Proxmox VE installer ISO contains two apt repositories that together hold Proxmox VE and every
+Debian package it needs, so the ISO alone is enough; no mirror or internet access.
+
+1. Copy the ISO to the host, e.g. `scp proxmox-ve_9.2-1.iso youruser@192.168.10.21:/tmp/`.
+2. Set `proxmox_install_iso_path: /tmp/proxmox-ve_9.2-1.iso` in `group_vars/proxmox.yml`.
+3. Run the playbook.
+
+What the role does with it:
+
+- Moves the ISO to `/var/lib/proxmox-iso/` (needs ~2 GB free there), because `/tmp` is a tmpfs on
+  Debian 13 and is emptied by the reboot into the Proxmox kernel. It's mounted at `/mnt/pve-iso`, now
+  and at boot, and stays the node's package source.
+- Adds the ISO's repositories (they are unsigned, so they're marked trusted) and pins them above
+  everything else. Some ISO packages need exact versions of Debian packages (e.g. `perl` needs the
+  same `perl-base`), so the host is first aligned with the ISO's versions, which can mean small
+  downgrades if the host was installed from a newer Debian ISO. The result matches a node installed
+  from the Proxmox ISO directly.
+- Disables the host's other apt sources (internet mirrors, the Debian DVD), which can't be reached
+  and would make `apt update` fail. `sources.list` is kept as `sources.list.pre-pve-iso`.
+
+Packages that aren't on the ISO, such as `auditd` (and `sudo`), have to be brought in as `.deb` files.
+On a machine with internet access and Debian 13, download them with their dependencies, copy the
+directory next to the playbook and point the role at it:
+
+```sh
+mkdir debs && cd debs && apt-get download auditd audispd-plugins libauparse0t64
+```
+```yaml
+proxmox_install_local_debs_dir: files/debs
+proxmox_install_auditd_enabled: true
+```
+
+## Logging in without sudo
+
+When the Debian installer is given a root password, it doesn't install `sudo` and the user it creates
+isn't an administrator. Ansible then logs in as that user and switches to root with `su`: set
+`ansible_become_method=su` in the inventory (as in `inventory.ini.example`) and run with
+`--ask-become-pass`, entering the root password. SSH as root isn't needed.
 
 ## Networking
 

@@ -1,9 +1,21 @@
+# auditd isn't on the Proxmox VE ISO: with only the ISO, bring its .deb files in through
+# proxmox_install_local_debs_dir.
 - name: "Install auditd"
-  apt:
-    name:
-      - auditd
-      - audispd-plugins
-    state: present
+  block:
+    - name: "Install auditd"
+      apt:
+        name:
+          - auditd
+          - audispd-plugins
+        state: present
+  rescue:
+    - name: "Explain how to get auditd"
+      fail:
+        msg: >-
+          auditd could not be installed: {{ ansible_failed_result.msg | default('') }}.
+          It isn't on the Proxmox VE ISO. Put its .deb files (auditd, audispd-plugins, libauparse0t64)
+          in a directory on the controller and set proxmox_install_local_debs_dir to it, or set
+          proxmox_install_auditd_enabled to false.
 
 - name: "Enable auditd"
   systemd_service:

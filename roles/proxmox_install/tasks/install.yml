@@ -1,6 +1,7 @@
 # Installs Proxmox VE 9 on an existing Debian 13 (trixie) host, following the official
 # "Install Proxmox VE on Debian 13 Trixie" steps. Partitioning is left as it is.
-# All packages come from the repositories configured below, so it works air-gapped with local mirrors.
+# Packages come either from the Proxmox VE ISO on the host (proxmox_install_iso_path, see iso.yml) or
+# from the repositories configured below, so it works air-gapped with the ISO or with local mirrors.
 - name: "Check that the host runs Debian 13 on amd64"
   assert:
     that:
@@ -24,8 +25,12 @@
       {{ proxmox_install_node_ip }}
       {{ ansible_facts.hostname }}.{{ proxmox_install_domain }} {{ ansible_facts.hostname }}
 
+- name: "Use the Proxmox VE ISO as package source"
+  include_tasks: iso.yml
+  when: proxmox_install_iso_path | length > 0
+
 - name: "Use the given Debian repositories"
-  when: proxmox_install_debian_sources | length > 0
+  when: proxmox_install_debian_sources | length > 0 and proxmox_install_iso_path | length == 0
   block:
     - name: "Write debian.sources"
       copy:
@@ -39,34 +44,49 @@
         dest: /etc/apt/sources.list
         mode: "0644"
 
-- name: "Install the Proxmox archive keyring from the controller"
-  copy:
-    src: "{{ proxmox_install_keyring_src }}"
-    dest: /usr/share/keyrings/proxmox-archive-keyring.gpg
-    mode: "0644"
-  when: proxmox_install_keyring_src | length > 0
-- name: "Download the Proxmox archive keyring"
-  get_url:
-    url: "{{ proxmox_install_keyring_url }}"
-    dest: /usr/share/keyrings/proxmox-archive-keyring.gpg
-    mode: "0644"
-  when: proxmox_install_keyring_src | length == 0
+- name: "Set up the Proxmox VE repository"
+  when: proxmox_install_iso_path | length == 0
+  block:
+    - name: "Install the Proxmox archive keyring from the controller"
+      copy:
+        src: "{{ proxmox_install_keyring_src }}"
+        dest: /usr/share/keyrings/proxmox-archive-keyring.gpg
+        mode: "0644"
+      when: proxmox_install_keyring_src | length > 0
+    - name: "Download the Proxmox archive keyring"
+      get_url:
+        url: "{{ proxmox_install_keyring_url }}"
+        dest: /usr/share/keyrings/proxmox-archive-keyring.gpg
+        mode: "0644"
+      when: proxmox_install_keyring_src | length == 0
+    - name: "Add the Proxmox VE repository"
+      copy:
+        content: |
+          Types: deb
+          URIs: {{ proxmox_install_pve_repo_url }}
+          Suites: trixie
+          Components: {{ proxmox_install_pve_repo_component }}
+          Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
+        dest: /etc/apt/sources.list.d/pve-install-repo.sources
+        mode: "0644"
 
-- name: "Add the Proxmox VE repository"
-  copy:
-    content: |
-      Types: deb
-      URIs: {{ proxmox_install_pve_repo_url }}
-      Suites: trixie
-      Components: {{ proxmox_install_pve_repo_component }}
-      Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
-    dest: /etc/apt/sources.list.d/pve-install-repo.sources
-    mode: "0644"
-
+# With the ISO, the pin can move packages back to the ISO's versions, so downgrades are allowed.
 - name: "Upgrade the system"
   apt:
     update_cache: true
     upgrade: full
+  when: proxmox_install_iso_path | length == 0
+- name: "Align the system with the ISO"
+  command: apt-get full-upgrade -y -q --allow-downgrades
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  register: proxmox_install_iso_upgrade
+  changed_when: proxmox_install_iso_upgrade.stdout is not search('0 upgraded, 0 newly installed, 0 downgraded, 0 to remove')
+  when: proxmox_install_iso_path | length > 0
+
+- name: "Install packages from the controller"
+  include_tasks: local_debs.yml
+  when: proxmox_install_local_debs_dir | length > 0
 
 - name: "Preseed postfix"
   debconf:
@@ -97,6 +117,7 @@
   apt:
     name: proxmox-default-kernel
     state: present
+    allow_downgrade: "{{ proxmox_install_iso_path | length > 0 }}"
 
 - name: "Reboot into the Proxmox kernel"
   reboot:
@@ -111,6 +132,7 @@
       - open-iscsi
       - chrony
     state: present
+    allow_downgrade: "{{ proxmox_install_iso_path | length > 0 }}"
 
 # The install adds the enterprise repositories; they need a subscription and internet access.
 - name: "Find the Proxmox enterprise repositories"

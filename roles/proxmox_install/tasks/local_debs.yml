@@ -1,0 +1,18 @@
+# Installs .deb files from a directory on the controller, for packages that are on neither the ISO
+# nor a mirror (e.g. auditd when using only the ISO).
+- name: "Copy the local packages"
+  copy:
+    src: "{{ proxmox_install_local_debs_dir }}/"
+    dest: /var/lib/proxmox-iso/local-debs/
+    mode: "0644"
+  register: proxmox_install_local_debs_copied
+
+- name: "Install the local packages"
+  shell: |
+    set -e
+    set -- /var/lib/proxmox-iso/local-debs/*.deb
+    [ -e "$1" ] || { echo "no .deb files in {{ proxmox_install_local_debs_dir }}" >&2; exit 1; }
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -q --allow-downgrades "$@"
+  args:
+    executable: /bin/bash
+  when: proxmox_install_local_debs_copied is changed

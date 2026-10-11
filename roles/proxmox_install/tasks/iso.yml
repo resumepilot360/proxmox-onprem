@@ -1,0 +1,150 @@
+# Uses the Proxmox VE installer ISO on the host as the only package source (air-gapped, no mirror).
+# The ISO holds two unsigned apt repositories that together cover Proxmox VE and the Debian packages
+# it needs: dists/trixie/pve (Debian base) and proxmox/packages (everything else).
+- name: "Find the Proxmox VE ISO"
+  stat:
+    path: "{{ item }}"
+    get_checksum: false
+  loop:
+    - "{{ proxmox_install_iso_path }}"
+    - "{{ proxmox_install_iso_store }}"
+  register: proxmox_install_iso_stat
+
+- name: "Check that the ISO is there"
+  assert:
+    that: proxmox_install_iso_stat.results | selectattr('stat.exists') | list | length > 0
+    fail_msg: "No ISO at {{ proxmox_install_iso_path }} (or {{ proxmox_install_iso_store }} from an earlier run)."
+    quiet: true
+
+# /tmp is a tmpfs on Debian 13 and is emptied by the reboot into the Proxmox kernel, so the ISO is
+# moved to disk first and mounted from there (also at boot).
+- name: "Keep the ISO on disk"
+  when: not proxmox_install_iso_stat.results[1].stat.exists
+  block:
+    - name: "Create the ISO directory"
+      file:
+        path: "{{ proxmox_install_iso_store | dirname }}"
+        state: directory
+        mode: "0755"
+    - name: "Check free space for the ISO"
+      shell: |
+        set -o pipefail
+        df --output=avail -B1 {{ proxmox_install_iso_store | dirname | quote }} | tail -1
+      args:
+        executable: /bin/bash
+      register: proxmox_install_iso_free
+      changed_when: false
+    - name: "Assert there is room for the ISO"
+      assert:
+        that: proxmox_install_iso_free.stdout | int > proxmox_install_iso_stat.results[0].stat.size + 536870912
+        fail_msg: >-
+          Not enough space in {{ proxmox_install_iso_store | dirname }} for the ISO
+          ({{ proxmox_install_iso_stat.results[0].stat.size | human_readable }} + 512 MiB needed).
+          Set proxmox_install_iso_store to a filesystem with more room.
+        quiet: true
+    - name: "Move the ISO out of {{ proxmox_install_iso_path | dirname }}"
+      command: mv {{ proxmox_install_iso_path | quote }} {{ proxmox_install_iso_store | quote }}
+      args:
+        creates: "{{ proxmox_install_iso_store }}"
+
+- name: "Mount the ISO at boot"
+  lineinfile:
+    path: /etc/fstab
+    regexp: '^\S+\s+{{ proxmox_install_iso_mount | regex_escape }}\s'
+    line: "{{ proxmox_install_iso_store }} {{ proxmox_install_iso_mount }} iso9660 loop,ro,nofail 0 0"
+- name: "Create the ISO mount point"
+  file:
+    path: "{{ proxmox_install_iso_mount }}"
+    state: directory
+    mode: "0755"
+- name: "Mount the ISO"
+  shell: |
+    findmnt -n {{ proxmox_install_iso_mount | quote }} >/dev/null && exit 0
+    mount {{ proxmox_install_iso_mount | quote }} && echo mounted
+  register: proxmox_install_iso_mounted
+  changed_when: "'mounted' in proxmox_install_iso_mounted.stdout"
+
+- name: "Check that the ISO is a Proxmox VE 9 installer"
+  command: grep -q "RELEASE='9" {{ proxmox_install_iso_mount | quote }}/.cd-info
+  changed_when: false
+
+# The ISO's repositories are unsigned ("Trusted: yes"). Pinning them above everything else makes apt
+# use the ISO's versions, so the ISO's packages always fit together: some depend on exact versions
+# (e.g. perl on perl-base) and can't be satisfied by newer Debian packages already on the host.
+- name: "Add the ISO repositories"
+  copy:
+    content: |
+      Types: deb
+      URIs: file:{{ proxmox_install_iso_mount }}
+      Suites: trixie
+      Components: pve
+      Trusted: yes
+
+      Types: deb
+      URIs: file:{{ proxmox_install_iso_mount }}/proxmox/packages
+      Suites: ./
+      Trusted: yes
+    dest: /etc/apt/sources.list.d/pve-iso.sources
+    mode: "0644"
+- name: "Prefer the ISO's package versions"
+  copy:
+    content: |
+      # Local (file:) repositories, i.e. the Proxmox VE ISO, win over everything else.
+      Package: *
+      Pin: origin ""
+      Pin-Priority: 1001
+    dest: /etc/apt/preferences.d/pve-iso.pref
+    mode: "0644"
+
+# Air-gapped, the installer's sources (internet mirrors, the Debian DVD) can't be reached and make
+# "apt update" fail. Backups are kept next to the files.
+- name: "Disable the other apt sources"
+  when: proxmox_install_iso_disable_other_sources
+  block:
+    - name: "Find the other apt sources"
+      find:
+        paths: /etc/apt/sources.list.d
+        patterns: "*.sources,*.list"
+        excludes: pve-iso.sources
+      register: proxmox_install_other_sources
+    - name: "Back up sources.list"
+      copy:
+        src: /etc/apt/sources.list
+        dest: /etc/apt/sources.list.pre-pve-iso
+        remote_src: true
+        force: false
+        mode: "0644"
+      failed_when: false
+    - name: "Empty sources.list"
+      copy:
+        content: "# Disabled: packages come from the Proxmox VE ISO (/etc/apt/sources.list.d/pve-iso.sources).\n"
+        dest: /etc/apt/sources.list
+        mode: "0644"
+    - name: "Disable the other deb822 sources"
+      lineinfile:
+        path: "{{ item.path }}"
+        regexp: '^Enabled:'
+        line: "Enabled: no"
+        insertafter: '^Types:'
+      loop: "{{ proxmox_install_other_sources.files | selectattr('path', 'match', '.*\\.sources$') | list }}"
+      loop_control:
+        label: "{{ item.path }}"
+    - name: "Disable the other one-line sources"
+      command: mv {{ item.path | quote }} {{ (item.path ~ '.disabled') | quote }}
+      args:
+        removes: "{{ item.path }}"
+      loop: "{{ proxmox_install_other_sources.files | selectattr('path', 'match', '.*\\.list$') | list }}"
+      loop_control:
+        label: "{{ item.path }}"
+
+# python3-apt (for Ansible's apt module) comes from the ISO; installed with apt-get so that a
+# version change forced by the pin is allowed.
+- name: "Install python3-apt from the ISO"
+  shell: |
+    set -e
+    apt-get update -q
+    if python3 -c 'import apt' 2>/dev/null; then exit 0; fi
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -q --allow-downgrades python3-apt
+    echo installed
+  register: proxmox_install_python_apt
+  changed_when: "'installed' in proxmox_install_python_apt.stdout"

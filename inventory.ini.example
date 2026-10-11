@@ -1,4 +1,8 @@
 # Copy to inventory.ini. One line per Debian 13 host to turn into a Proxmox VE node.
-# The user needs sudo; add ansible_become_password via a vault or --ask-become-pass if sudo needs a password.
+#
+# ansible_user is any user that can log in over SSH. Ansible switches to root:
+# - no sudo on the host (the Debian installer leaves it out when a root password is set):
+#   keep ansible_become_method=su and run with --ask-become-pass (the root password);
+# - with sudo: remove ansible_become_method and use --ask-become-pass if sudo asks for a password.
 [proxmox]
-pve-a ansible_host=192.168.10.21 ansible_user=admin
+pve-a ansible_host=192.168.10.21 ansible_user=youruser ansible_become_method=su

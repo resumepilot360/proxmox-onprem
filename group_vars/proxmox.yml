@@ -1,6 +1,14 @@
 # Settings for all hosts in [proxmox]. Override per host in host_vars/<name>.yml.
 
-# --- Repositories ------------------------------------------------------------------------------
+# --- Package source ------------------------------------------------------------------------------
+# Air-gapped with the Proxmox VE ISO: copy the ISO to the host (e.g. /tmp) and point to it. All
+# packages then come from the ISO; no mirror or internet is needed and the settings below are ignored.
+proxmox_install_iso_path: /tmp/proxmox-ve_9.2-1.iso
+
+# Packages that aren't on the ISO, e.g. auditd (see README). Path on the controller.
+# proxmox_install_local_debs_dir: files/debs
+
+# --- Repositories (only without proxmox_install_iso_path) ----------------------------------------
 # Air-gapped: point both repositories at your local mirror (e.g. proxmox-offline-mirror or aptly
 # behind nginx) and ship the Proxmox keyring from the controller. Leave these unset to use the internet.
 #
@@ -32,7 +40,9 @@ proxmox_install_required_mounts:
   /var/log: [nodev, nosuid, noexec]
   /var/log/audit: [nodev, nosuid, noexec]
 
-proxmox_install_auditd_enabled: true
+# auditd (CIS) isn't on the Proxmox VE ISO: enable it once its .deb files are in
+# proxmox_install_local_debs_dir (see README).
+proxmox_install_auditd_enabled: false
 
 # --- Networking and storage --------------------------------------------------------------------
 # Usually set per host in host_vars/<name>.yml (see README): interface names and IPs differ per node.
